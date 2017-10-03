@@ -6,6 +6,7 @@ description = "Atomic counting semaphore"
 license = "BSD-2-Clause"
 documentation = "https://docs.rs/semaphore"
 repository = "https://github.com/srijs/rust-semaphore"
+readme = "README.md"
 keywords = ["semaphore", "concurrency", "atomic"]
 
 [dependencies]

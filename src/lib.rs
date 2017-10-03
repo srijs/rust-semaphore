@@ -1,3 +1,12 @@
+//! Atomic counting semaphore that can help you control access to a common resource
+//! by multiple processes in a concurrent system.
+//!
+//! ## Features
+//!
+//! - Provides RAII-style atomic acquire and release
+//! - Implements `Send`, `Sync` and `Clone`
+//! - Can block until count to drops to zero (useful for implementing shutdown)
+
 extern crate parking_lot;
 
 use std::sync::Arc;
@@ -6,16 +15,24 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use parking_lot::{Condvar, Mutex};
 
 #[derive(Clone)]
+/// An atomic counter which can be shared across processes.
 pub struct Semaphore {
     inner: Arc<Inner>
 }
 
 impl Semaphore {
+    /// Create a new semaphore with the given limit.
     pub fn new(limit: usize) -> Self {
         Semaphore { inner: Arc::new(Inner::new(limit)) }
     }
 
     #[inline]
+    /// Attempt to access a resource of this semaphore.
+    ///
+    /// This function will first acquire a resource and then return an RAII
+    /// guard structure which will release the resource when it falls out of scope.
+    ///
+    /// If the semaphore is at limit, `None` will be returned.
     pub fn try_access(&self) -> Option<Guard> {
         if self.inner.try_acquire() {
             Some(Guard { inner: self.inner.clone() })
@@ -25,11 +42,16 @@ impl Semaphore {
     }
 
     #[inline]
+    /// Block until the resource is not being accessed anymore.
+    ///
+    /// This can be used to determine whether it is safe to free
+    /// or shutdown the resource.
     pub fn wait_until_all_released(&self) {
         self.inner.wait_until_all_released()
     }
 }
 
+/// An RAII guard used to release a semaphore automatically when it falls out of scope.
 pub struct Guard {
     inner: Arc<Inner>
 }
