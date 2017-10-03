@@ -1,0 +1,2 @@
+# rust-semaphore
+Semaphore library
