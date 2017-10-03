@@ -1,11 +1,12 @@
 # Semaphore
 
-_Atomic counting semaphore_
-
-A datastructure that can help you control access to a common resource by multiple processes in a concurrent system.
+Atomic counting semaphore that can help you control access to a common resource
+by multiple processes in a concurrent system.
 
 ## Features
 
-- Provides RAII-style atomic acquire and release
+- Fully lock-free* semantics
+- Provides RAII-style acquire/release API
 - Implements `Send`, `Sync` and `Clone`
-- Can block until count to drops to zero (useful for implementing shutdown)
+
+_* when not using the `shutdown` API_
