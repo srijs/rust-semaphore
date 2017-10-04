@@ -31,7 +31,7 @@ pub enum TryAccessError {
     Shutdown
 }
 
-/// An atomic counter which can be shared across processes.
+/// An atomic counter that can help you control shared access to a resource.
 pub struct Semaphore<T> {
     raw: Arc<RawSemaphore>,
     resource: Arc<RwLock<Option<Arc<T>>>>
@@ -47,7 +47,7 @@ impl<T> Clone for Semaphore<T> {
 }
 
 impl<T> Semaphore<T> {
-    /// Create a new semaphore with the given limit.
+    /// Create a new semaphore around a resource with the given limit.
     pub fn new(limit: usize, resource: T) -> Self {
         Semaphore {
             raw: Arc::new(RawSemaphore::new(limit)),
@@ -66,7 +66,7 @@ impl<T> Semaphore<T> {
     pub fn try_access(&self) -> Result<Guard<T>, TryAccessError> {
         if let Some(ref resource) = *self.resource.read() {
             if self.raw.try_acquire() {
-                Ok(Guard { raw: self.raw.clone(), resource: resource.clone() })
+                Ok(Guard { raw: self.raw.clone(), resource: Arc::new(resource.clone()) })
             } else {
                 Err(TryAccessError::CapacityExceeded)
             }
@@ -109,17 +109,28 @@ impl<T> ShutdownHandle<T> {
     }
 }
 
-/// An RAII guard used to release a semaphore automatically when it falls out of scope.
+/// An RAII guard used to release access to the semaphore automatically when it falls out of scope.
+///
+/// Guards can be cloned, in which case the original guard and all descendent grants need
+/// to go out of scope for the single access to be released on the semaphore.
 pub struct Guard<T> {
     raw: Arc<RawSemaphore>,
-    resource: Arc<T>
+    resource: Arc<Arc<T>>
+}
+
+impl<T> Clone for Guard<T> {
+    #[inline]
+    fn clone(&self) -> Guard<T> {
+        Guard { raw: self.raw.clone(), resource: self.resource.clone() }
+    }
 }
 
 impl<T> Guard<T> {
     #[inline]
+    #[deprecated(since="0.2.1", note="please use `Grant::clone` instead")]
     /// Spawns an unguarded reference to the resource.
     pub fn as_unguarded(&self) -> UnguardedRef<T> {
-        UnguardedRef { resource: self.resource.clone() }
+        UnguardedRef { resource: (*self.resource).clone() }
     }
 }
 
@@ -141,7 +152,7 @@ impl<T: Sized> Deref for Guard<T> {
 
 /// An unguarded reference to a resource.
 ///
-/// Can be created via `Guard::unguard`.
+/// Can be created via `Guard::as_unguarded`.
 ///
 /// This reference is not tracked by the semaphore around the resource.
 /// It can therefore be used in situations where after acquiring access
