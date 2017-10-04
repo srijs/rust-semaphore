@@ -19,7 +19,7 @@ use parking_lot::RwLock;
 mod raw;
 use raw::RawSemaphore;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 /// An error indicating a failure to acquire access to the resource
 /// behind the semaphore.
 ///
@@ -66,7 +66,8 @@ impl<T> Semaphore<T> {
     pub fn try_access(&self) -> Result<Guard<T>, TryAccessError> {
         if let Some(ref resource) = *self.resource.read() {
             if self.raw.try_acquire() {
-                Ok(Guard { raw: self.raw.clone(), resource: Arc::new(resource.clone()) })
+                let raw_guard = RawGuard(self.raw.clone());
+                Ok(Guard { raw: Arc::new(raw_guard), resource: resource.clone() })
             } else {
                 Err(TryAccessError::CapacityExceeded)
             }
@@ -105,7 +106,21 @@ impl<T> ShutdownHandle<T> {
     /// references. This means that after the method returned the resource
     /// could still be kept alive by one or more unguarded references.
     pub fn wait(&self) {
-        self.raw.wait_until_all_released()
+        self.raw.wait_until_inactive()
+    }
+
+    #[doc(hidden)]
+    pub fn is_complete(&self) -> bool {
+        !self.raw.is_active()
+    }
+}
+
+struct RawGuard(Arc<RawSemaphore>);
+
+impl Drop for RawGuard {
+    #[inline]
+    fn drop(&mut self) {
+        self.0.release()
     }
 }
 
@@ -114,8 +129,8 @@ impl<T> ShutdownHandle<T> {
 /// Guards can be cloned, in which case the original guard and all descendent guards need
 /// to go out of scope for the single access to be released on the semaphore.
 pub struct Guard<T> {
-    raw: Arc<RawSemaphore>,
-    resource: Arc<Arc<T>>
+    raw: Arc<RawGuard>,
+    resource: Arc<T>
 }
 
 impl<T> Clone for Guard<T> {
@@ -130,14 +145,7 @@ impl<T> Guard<T> {
     #[deprecated(since="0.2.1", note="please use `Guard::clone` instead")]
     /// Spawns an unguarded reference to the resource.
     pub fn as_unguarded(&self) -> UnguardedRef<T> {
-        UnguardedRef { resource: (*self.resource).clone() }
-    }
-}
-
-impl<T> Drop for Guard<T> {
-    #[inline]
-    fn drop(&mut self) {
-        self.raw.release()
+        UnguardedRef { resource: self.resource.clone() }
     }
 }
 
@@ -175,7 +183,7 @@ impl<T: Sized> Deref for UnguardedRef<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::Semaphore;
+    use super::{Semaphore, TryAccessError};
 
     #[test]
     fn succeeds_to_acquire_when_empty() {
@@ -189,7 +197,7 @@ mod tests {
         let guards = (0..4).map(|_| {
             sema.try_access().expect("guard acquisition failed")
         }).collect::<Vec<_>>();
-        assert!(sema.try_access().err().is_some());
+        assert_eq!(sema.try_access().err(), Some(TryAccessError::CapacityExceeded));
         drop(guards);
     }
 
@@ -199,5 +207,35 @@ mod tests {
         let guard = sema.try_access().expect("guard acquisition failed");
         drop(guard);
         assert!(sema.try_access().ok().is_some());
+    }
+
+    #[test]
+    fn fails_to_acquire_when_shut_down() {
+        let sema = Semaphore::new(4, ());
+        sema.shutdown();
+        assert_eq!(sema.try_access().err(), Some(TryAccessError::Shutdown));
+    }
+
+    #[test]
+    fn shutdown_complete_when_guard_drops() {
+        let sema = Semaphore::new(1, ());
+        let guard = sema.try_access().expect("guard acquisition failed");
+        let handle = sema.shutdown();
+        assert_eq!(false, handle.is_complete());
+        drop(guard);
+        assert_eq!(true, handle.is_complete());
+    }
+
+    #[test]
+    fn shutdown_complete_when_parent_and_child_guards_drop()  {
+        let sema = Semaphore::new(1, ());
+        let parent_guard = sema.try_access().expect("guard acquisition failed");
+        let child_guard = parent_guard.clone();
+        let handle = sema.shutdown();
+        assert_eq!(false, handle.is_complete());
+        drop(parent_guard);
+        assert_eq!(false, handle.is_complete());
+        drop(child_guard);
+        assert_eq!(true, handle.is_complete());
     }
 }

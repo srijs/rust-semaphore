@@ -49,10 +49,15 @@ impl RawSemaphore {
     }
 
     #[inline]
-    pub fn wait_until_all_released(&self) {
+    pub fn is_active(&self) -> bool {
+        self.active.load(Ordering::SeqCst) > 0
+    }
+
+    #[inline]
+    pub fn wait_until_inactive(&self) {
         let mut lock = self.lock.lock();
 
-        while self.active.load(Ordering::SeqCst) > 0 {
+        while self.is_active() {
             self.cond.wait(&mut lock);
         }
     }
