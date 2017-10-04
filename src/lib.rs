@@ -111,7 +111,7 @@ impl<T> ShutdownHandle<T> {
 
 /// An RAII guard used to release access to the semaphore automatically when it falls out of scope.
 ///
-/// Guards can be cloned, in which case the original guard and all descendent grants need
+/// Guards can be cloned, in which case the original guard and all descendent guards need
 /// to go out of scope for the single access to be released on the semaphore.
 pub struct Guard<T> {
     raw: Arc<RawSemaphore>,
