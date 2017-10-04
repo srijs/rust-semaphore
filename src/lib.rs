@@ -127,7 +127,7 @@ impl<T> Clone for Guard<T> {
 
 impl<T> Guard<T> {
     #[inline]
-    #[deprecated(since="0.2.1", note="please use `Grant::clone` instead")]
+    #[deprecated(since="0.2.1", note="please use `Guard::clone` instead")]
     /// Spawns an unguarded reference to the resource.
     pub fn as_unguarded(&self) -> UnguardedRef<T> {
         UnguardedRef { resource: (*self.resource).clone() }
