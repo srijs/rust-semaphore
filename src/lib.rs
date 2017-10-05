@@ -223,6 +223,7 @@ mod tests {
         let sema = Semaphore::new(1, ());
         let handle = sema.shutdown();
         assert_eq!(true, handle.is_complete());
+        assert_eq!(Some(()), handle.wait());
     }
 
     #[test]
@@ -233,6 +234,7 @@ mod tests {
         assert_eq!(false, handle.is_complete());
         drop(guard);
         assert_eq!(true, handle.is_complete());
+        assert_eq!(Some(()), handle.wait());
     }
 
     #[test]
@@ -246,5 +248,17 @@ mod tests {
         assert_eq!(false, handle.is_complete());
         drop(child_guard);
         assert_eq!(true, handle.is_complete());
+        assert_eq!(Some(()), handle.wait());
+    }
+
+    #[test]
+    fn first_shutdown_can_extract_resource() {
+        let sema = Semaphore::new(1, ());
+        let first_handle = sema.shutdown();
+        let second_handle = sema.shutdown();
+        let third_handle = sema.shutdown();
+        assert_eq!(None, second_handle.wait());
+        assert_eq!(Some(()), first_handle.wait());
+        assert_eq!(None, third_handle.wait());
     }
 }
