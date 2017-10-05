@@ -13,25 +13,30 @@ extern crate parking_lot;
 
 use std::ops::Deref;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use parking_lot::RwLock;
 
 mod raw;
 use raw::RawSemaphore;
 
-#[derive(Debug, PartialEq, Eq)]
-/// An error indicating a failure to acquire access to the resource
+/// Result returned from `Semaphore::try_access`.
+pub type TryAccessResult<T> = Result<SemaphoreGuard<T>, TryAccessError>;
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+/// Error indicating a failure to acquire access to the resource
 /// behind the semaphore.
 ///
 /// Returned from `Semaphore::try_access`.
 pub enum TryAccessError {
-    /// The capacity of the semaphore was exceeded.
-    CapacityExceeded,
-    /// The semaphore has been shut down.
-    Shutdown
+    /// This semaphore has shut down and will no longer grant access to the underlying resource.
+    Shutdown,
+    /// This semaphore has no more capacity to grant further access.
+    /// Other access needs to be released before this semaphore can grant more.
+    NoCapacity
 }
 
-/// An atomic counter that can help you control shared access to a resource.
+/// Atomic counter that can help you control shared access to a resource.
 pub struct Semaphore<T> {
     raw: Arc<RawSemaphore>,
     resource: Arc<RwLock<Option<Arc<T>>>>
@@ -61,15 +66,17 @@ impl<T> Semaphore<T> {
     /// This function will try to acquire access, and then return an RAII
     /// guard structure which will release the access when it falls out of scope.
     ///
-    /// If the semaphore is at limit or currently shutting down,
-    /// a `TryAccessError` will be returned.
-    pub fn try_access(&self) -> Result<Guard<T>, TryAccessError> {
+    /// If the semaphore is out of capacity or shut down, a `TryAccessError` will be returned.
+    pub fn try_access(&self) -> TryAccessResult<T> {
         if let Some(ref resource) = *self.resource.read() {
             if self.raw.try_acquire() {
-                let raw_guard = RawGuard(self.raw.clone());
-                Ok(Guard { raw: Arc::new(raw_guard), resource: resource.clone() })
+                Ok(SemaphoreGuard {
+                    raw: self.raw.clone(),
+                    counter: Arc::new(AtomicUsize::new(1)),
+                    resource: resource.clone()
+                })
             } else {
-                Err(TryAccessError::CapacityExceeded)
+                Err(TryAccessError::NoCapacity)
             }
         } else {
             Err(TryAccessError::Shutdown)
@@ -88,25 +95,42 @@ impl<T> Semaphore<T> {
     pub fn shutdown(&self) -> ShutdownHandle<T> {
         ShutdownHandle {
             raw: self.raw.clone(),
-            _resource: self.resource.write().take()
+            resource: self.resource.write().take()
         }
     }
 }
 
-/// A handle representing the shutdown process of a semaphore. 
+/// Handle representing the shutdown process of a semaphore,
+/// allowing for extraction of the underlying resource.
+///
+/// Returned from `Semaphore::shutdown`. 
 pub struct ShutdownHandle<T> {
     raw: Arc<RawSemaphore>,
-    _resource: Option<Arc<T>>
+    resource: Option<Arc<T>>
 }
 
 impl<T> ShutdownHandle<T> {
-    /// Block until the resource is not being accessed anymore.
+    /// Block until all access has been released to the semaphore,
+    /// and extract the underlying resource.
     ///
-    /// Please note that this does not take into account any unguarded
-    /// references. This means that after the method returned the resource
-    /// could still be kept alive by one or more unguarded references.
-    pub fn wait(&self) {
-        self.raw.wait_until_inactive()
+    /// When `Semaphore::shutdown` has been called multiple times,
+    /// only the first shutdown handle will return the resource.
+    /// All others will return `None`.
+    pub fn wait(self) -> Option<T> {
+        self.raw.wait_until_inactive();
+        self.resource.map(|arc| {
+            let mut local_arc = arc;
+            loop {
+                match Arc::try_unwrap(local_arc) {
+                    Ok(resource) => {
+                        return resource;
+                    },
+                    Err(arc) => {
+                        local_arc = arc;
+                    }
+                }
+            }
+        })
     }
 
     #[doc(hidden)]
@@ -115,64 +139,40 @@ impl<T> ShutdownHandle<T> {
     }
 }
 
-struct RawGuard(Arc<RawSemaphore>);
-
-impl Drop for RawGuard {
-    #[inline]
-    fn drop(&mut self) {
-        self.0.release()
-    }
-}
-
-/// An RAII guard used to release access to the semaphore automatically when it falls out of scope.
+/// RAII guard used to release access to the semaphore automatically when it falls out of scope.
+///
+/// Returned from `Semaphore::try_access`. 
 ///
 /// Guards can be cloned, in which case the original guard and all descendent guards need
 /// to go out of scope for the single access to be released on the semaphore.
-pub struct Guard<T> {
-    raw: Arc<RawGuard>,
+pub struct SemaphoreGuard<T> {
+    raw: Arc<RawSemaphore>,
+    counter: Arc<AtomicUsize>,
     resource: Arc<T>
 }
 
-impl<T> Clone for Guard<T> {
+impl<T> Clone for SemaphoreGuard<T> {
     #[inline]
-    fn clone(&self) -> Guard<T> {
-        Guard { raw: self.raw.clone(), resource: self.resource.clone() }
+    fn clone(&self) -> SemaphoreGuard<T> {
+        self.counter.fetch_add(1, Ordering::SeqCst);
+        SemaphoreGuard {
+            raw: self.raw.clone(),
+            counter: self.counter.clone(),
+            resource: self.resource.clone()
+        }
     }
 }
 
-impl<T> Guard<T> {
-    #[inline]
-    #[deprecated(since="0.2.1", note="please use `Guard::clone` instead")]
-    /// Spawns an unguarded reference to the resource.
-    pub fn as_unguarded(&self) -> UnguardedRef<T> {
-        UnguardedRef { resource: self.resource.clone() }
+impl<T> Drop for SemaphoreGuard<T> {
+    fn drop(&mut self) {
+        let previous_count = self.counter.fetch_sub(1, Ordering::SeqCst);
+        if previous_count == 1 {
+            self.raw.release();
+        }
     }
 }
 
-impl<T: Sized> Deref for Guard<T> {
-    type Target = T;
-
-    #[inline]
-    fn deref(&self) -> &T {
-        self.resource.deref()
-    }
-}
-
-/// An unguarded reference to a resource.
-///
-/// Can be created via `Guard::as_unguarded`.
-///
-/// This reference is not tracked by the semaphore around the resource.
-/// It can therefore be used in situations where after acquiring access
-/// you want to split access to the resource.
-///
-/// Caution is advised as the existence of unguarded references will cause
-/// the resource to be retained, even when the semaphore has fully shut down.
-pub struct UnguardedRef<T> {
-    resource: Arc<T>
-}
-
-impl<T: Sized> Deref for UnguardedRef<T> {
+impl<T: Sized> Deref for SemaphoreGuard<T> {
     type Target = T;
 
     #[inline]
@@ -197,7 +197,8 @@ mod tests {
         let guards = (0..4).map(|_| {
             sema.try_access().expect("guard acquisition failed")
         }).collect::<Vec<_>>();
-        assert_eq!(sema.try_access().err(), Some(TryAccessError::CapacityExceeded));
+        assert_eq!(sema.try_access().err().unwrap(),
+            TryAccessError::NoCapacity);
         drop(guards);
     }
 
@@ -213,7 +214,15 @@ mod tests {
     fn fails_to_acquire_when_shut_down() {
         let sema = Semaphore::new(4, ());
         sema.shutdown();
-        assert_eq!(sema.try_access().err(), Some(TryAccessError::Shutdown));
+        assert_eq!(sema.try_access().err().unwrap(),
+            TryAccessError::Shutdown);
+    }
+
+    #[test]
+    fn shutdown_complete_when_empty() {
+        let sema = Semaphore::new(1, ());
+        let handle = sema.shutdown();
+        assert_eq!(true, handle.is_complete());
     }
 
     #[test]
