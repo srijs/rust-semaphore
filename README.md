@@ -5,8 +5,8 @@ by multiple processes in a concurrent system.
 
 ## Features
 
-- Fully lock-free* semantics
+- Effectively lock-free* semantics
 - Provides RAII-style acquire/release API
 - Implements `Send`, `Sync` and `Clone`
 
-_* when not using the `shutdown` API_
+_* lock-free when not using the `shutdown` API_
