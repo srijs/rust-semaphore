@@ -11,13 +11,18 @@
 
 extern crate parking_lot;
 
-use std::ops::Deref;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
 
 mod raw;
 use raw::RawSemaphore;
+
+mod guard;
+pub use guard::SemaphoreGuard;
+
+mod shutdown;
+pub use shutdown::ShutdownHandle;
 
 #[cfg(test)]
 mod tests;
@@ -74,10 +79,7 @@ impl<T> Semaphore<T> {
     pub fn try_access(&self) -> TryAccessResult<T> {
         if let Some(ref resource) = *self.resource.read() {
             if self.raw.try_acquire() {
-                Ok(SemaphoreGuard {
-                    raw: self.raw.clone(),
-                    resource: resource.clone()
-                })
+                Ok(guard::new(&self.raw, resource))
             } else {
                 Err(TryAccessError::NoCapacity)
             }
@@ -95,80 +97,6 @@ impl<T> Semaphore<T> {
     /// Does _not_ block until the resource is no longer in use. If you would like to do that,
     /// you can call `wait` on the returned handle.
     pub fn shutdown(&self) -> ShutdownHandle<T> {
-        ShutdownHandle {
-            raw: self.raw.clone(),
-            resource: self.resource.write().take()
-        }
-    }
-}
-
-/// Handle representing the shutdown process of a semaphore,
-/// allowing for extraction of the underlying resource.
-///
-/// Returned from `Semaphore::shutdown`. 
-pub struct ShutdownHandle<T> {
-    raw: Arc<RawSemaphore>,
-    resource: Option<Arc<T>>
-}
-
-impl<T> ShutdownHandle<T> {
-    /// Block until all access has been released to the semaphore,
-    /// and extract the underlying resource.
-    ///
-    /// When `Semaphore::shutdown` has been called multiple times,
-    /// only the first shutdown handle will return the resource.
-    /// All others will return `None`.
-    pub fn wait(self) -> Option<T> {
-        self.raw.wait_until_inactive();
-        self.resource.map(|mut arc| {
-            loop {
-                match Arc::try_unwrap(arc) {
-                    Ok(resource) => {
-                        return resource;
-                    },
-                    Err(returned_arc) => {
-                        arc = returned_arc;
-                    }
-                }
-            }
-        })
-    }
-
-    #[doc(hidden)]
-    pub fn is_complete(&self) -> bool {
-        !self.raw.is_active()
-    }
-}
-
-/// RAII guard used to release access to the semaphore automatically when it falls out of scope.
-///
-/// Returned from `Semaphore::try_access`. 
-///
-/// ## Sharing guards
-///
-/// There are cases where, once acquired, you want to share a guard between multiple threads
-/// of execution. This pattern can be implemented by wrapping the acquired guard into an [`Rc`][1]
-/// or [`Arc`][2] reference.
-///
-/// [1]: https://doc.rust-lang.org/std/rc/struct.Rc.html
-/// [2]: https://doc.rust-lang.org/std/sync/struct.Arc.html
-pub struct SemaphoreGuard<T> {
-    raw: Arc<RawSemaphore>,
-    resource: Arc<T>
-}
-
-impl<T> Drop for SemaphoreGuard<T> {
-    #[inline]
-    fn drop(&mut self) {
-        self.raw.release()
-    }
-}
-
-impl<T: Sized> Deref for SemaphoreGuard<T> {
-    type Target = T;
-
-    #[inline]
-    fn deref(&self) -> &T {
-        self.resource.deref()
+        shutdown::new(&self.raw, self.resource.write().take())
     }
 }
