@@ -117,15 +117,14 @@ impl<T> ShutdownHandle<T> {
     /// All others will return `None`.
     pub fn wait(self) -> Option<T> {
         self.raw.wait_until_inactive();
-        self.resource.map(|arc| {
-            let mut local_arc = arc;
+        self.resource.map(|mut arc| {
             loop {
-                match Arc::try_unwrap(local_arc) {
+                match Arc::try_unwrap(arc) {
                     Ok(resource) => {
                         return resource;
                     },
-                    Err(arc) => {
-                        local_arc = arc;
+                    Err(returned_arc) => {
+                        arc = returned_arc;
                     }
                 }
             }
