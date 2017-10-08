@@ -69,12 +69,9 @@ impl<T> Semaphore<T> {
     pub fn try_access(&self) -> TryAccessResult<T> {
         if let Some(ref resource) = *self.resource.read() {
             if self.raw.try_acquire() {
-                let inner = GuardInner {
-                   raw: self.raw.clone(),
-                   resource: resource.clone()
-                };
                 Ok(SemaphoreGuard {
-                    inner: Arc::new(inner)
+                    raw: self.raw.clone(),
+                    resource: resource.clone()
                 })
             } else {
                 Err(TryAccessError::NoCapacity)
@@ -140,33 +137,27 @@ impl<T> ShutdownHandle<T> {
     }
 }
 
-struct GuardInner<T> {
-    raw: Arc<RawSemaphore>,
-    resource: Arc<T>
-}
-
-impl<T> Drop for GuardInner<T> {
-    fn drop(&mut self) {
-        self.raw.release()
-    }
-}
-
 /// RAII guard used to release access to the semaphore automatically when it falls out of scope.
 ///
 /// Returned from `Semaphore::try_access`. 
 ///
-/// Guards can be cloned, in which case the original guard and all descendent guards need
-/// to go out of scope for the single access to be released on the semaphore.
+/// ## Sharing guards
+///
+/// There are cases where, once acquired, you want to share a guard between multiple threads
+/// of execution. This pattern can be implemented by wrapping the acquired guard into an [`Rc`][1]
+/// or [`Arc`][2] reference.
+///
+/// [1]: https://doc.rust-lang.org/std/rc/struct.Rc.html
+/// [2]: https://doc.rust-lang.org/std/sync/struct.Arc.html
 pub struct SemaphoreGuard<T> {
-    inner: Arc<GuardInner<T>>
+    raw: Arc<RawSemaphore>,
+    resource: Arc<T>
 }
 
-impl<T> Clone for SemaphoreGuard<T> {
+impl<T> Drop for SemaphoreGuard<T> {
     #[inline]
-    fn clone(&self) -> SemaphoreGuard<T> {
-        SemaphoreGuard {
-            inner: self.inner.clone()
-        }
+    fn drop(&mut self) {
+        self.raw.release()
     }
 }
 
@@ -175,7 +166,7 @@ impl<T: Sized> Deref for SemaphoreGuard<T> {
 
     #[inline]
     fn deref(&self) -> &T {
-        self.inner.resource.deref()
+        self.resource.deref()
     }
 }
 
@@ -231,20 +222,6 @@ mod tests {
         let handle = sema.shutdown();
         assert_eq!(false, handle.is_complete());
         drop(guard);
-        assert_eq!(true, handle.is_complete());
-        assert_eq!(Some(()), handle.wait());
-    }
-
-    #[test]
-    fn shutdown_complete_when_parent_and_child_guards_drop()  {
-        let sema = Semaphore::new(1, ());
-        let parent_guard = sema.try_access().expect("guard acquisition failed");
-        let child_guard = parent_guard.clone();
-        let handle = sema.shutdown();
-        assert_eq!(false, handle.is_complete());
-        drop(parent_guard);
-        assert_eq!(false, handle.is_complete());
-        drop(child_guard);
         assert_eq!(true, handle.is_complete());
         assert_eq!(Some(()), handle.wait());
     }
