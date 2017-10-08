@@ -35,7 +35,7 @@ pub enum TryAccessError {
     NoCapacity
 }
 
-/// Atomic counter that can help you control shared access to a resource.
+/// Atomic counting semaphore that can help you control concurrent access to a common resource.
 pub struct Semaphore<T> {
     raw: Arc<RawSemaphore>,
     resource: Arc<RwLock<Option<Arc<T>>>>
@@ -51,7 +51,10 @@ impl<T> Clone for Semaphore<T> {
 }
 
 impl<T> Semaphore<T> {
-    /// Create a new semaphore around a resource with the given capacity.
+    /// Create a new semaphore around a resource.
+    ///
+    /// The semaphore will limit the number of processes that can access
+    /// the underlying resource at every point in time to the specified capacity.
     pub fn new(capacity: usize, resource: T) -> Self {
         Semaphore {
             raw: Arc::new(RawSemaphore::new(capacity)),
