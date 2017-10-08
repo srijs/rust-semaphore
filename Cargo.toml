@@ -1,6 +1,6 @@
 [package]
 name = "semaphore"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["Sam Rijs <srijs@airpost.net>"]
 description = "Atomic/lock-free counting semaphore"
 license = "BSD-2-Clause"
