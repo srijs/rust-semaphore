@@ -35,7 +35,7 @@ pub enum TryAccessError {
     NoCapacity
 }
 
-/// Atomic counting semaphore that can help you control concurrent access to a common resource.
+/// Counting semaphore to control concurrent access to a common resource.
 pub struct Semaphore<T> {
     raw: Arc<RawSemaphore>,
     resource: Arc<RwLock<Option<Arc<T>>>>
@@ -67,7 +67,6 @@ impl<T> Semaphore<T> {
     ///
     /// This function will try to acquire access, and then return an RAII
     /// guard structure which will release the access when it falls out of scope.
-    ///
     /// If the semaphore is out of capacity or shut down, a `TryAccessError` will be returned.
     pub fn try_access(&self) -> TryAccessResult<T> {
         if let Some(ref resource) = *self.resource.read() {
@@ -87,7 +86,6 @@ impl<T> Semaphore<T> {
     /// Shut down the semaphore.
     ///
     /// This prevents any further access from being granted to the underlying resource.
-    ///
     /// As soon as the last access is released and the returned handle goes out of scope,
     /// the resource will be dropped.
     ///
