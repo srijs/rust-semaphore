@@ -51,10 +51,10 @@ impl<T> Clone for Semaphore<T> {
 }
 
 impl<T> Semaphore<T> {
-    /// Create a new semaphore around a resource with the given limit.
-    pub fn new(limit: usize, resource: T) -> Self {
+    /// Create a new semaphore around a resource with the given capacity.
+    pub fn new(capacity: usize, resource: T) -> Self {
         Semaphore {
-            raw: Arc::new(RawSemaphore::new(limit)),
+            raw: Arc::new(RawSemaphore::new(capacity)),
             resource: Arc::new(RwLock::new(Some(Arc::new(resource))))
         }
     }

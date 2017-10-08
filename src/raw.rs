@@ -4,16 +4,16 @@ use parking_lot::{Condvar, Mutex};
 
 pub struct RawSemaphore {
     active: AtomicUsize,
-    limit: usize,
+    capacity: usize,
     lock: Mutex<()>,
     cond: Condvar
 }
 
 impl RawSemaphore {
-    pub fn new(limit: usize) -> RawSemaphore {
+    pub fn new(capacity: usize) -> RawSemaphore {
         RawSemaphore {
             active: AtomicUsize::default(),
-            limit: limit,
+            capacity: capacity,
             lock: Mutex::new(()),
             cond: Condvar::new()
         }
@@ -23,8 +23,8 @@ impl RawSemaphore {
     pub fn try_acquire(&self) -> bool {
         loop {
             let current_active = self.active.load(Ordering::SeqCst);
-            assert!(current_active <= self.limit);
-            if current_active == self.limit {
+            assert!(current_active <= self.capacity);
+            if current_active == self.capacity {
                 return false;
             }
             let previous_active = self.active.compare_and_swap(
