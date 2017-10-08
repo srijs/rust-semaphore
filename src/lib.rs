@@ -13,7 +13,6 @@ extern crate parking_lot;
 
 use std::ops::Deref;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use parking_lot::RwLock;
 
@@ -70,10 +69,12 @@ impl<T> Semaphore<T> {
     pub fn try_access(&self) -> TryAccessResult<T> {
         if let Some(ref resource) = *self.resource.read() {
             if self.raw.try_acquire() {
+                let inner = GuardInner {
+                   raw: self.raw.clone(),
+                   resource: resource.clone()
+                };
                 Ok(SemaphoreGuard {
-                    raw: self.raw.clone(),
-                    counter: Arc::new(AtomicUsize::new(1)),
-                    resource: resource.clone()
+                    inner: Arc::new(inner)
                 })
             } else {
                 Err(TryAccessError::NoCapacity)
@@ -139,6 +140,17 @@ impl<T> ShutdownHandle<T> {
     }
 }
 
+struct GuardInner<T> {
+    raw: Arc<RawSemaphore>,
+    resource: Arc<T>
+}
+
+impl<T> Drop for GuardInner<T> {
+    fn drop(&mut self) {
+        self.raw.release()
+    }
+}
+
 /// RAII guard used to release access to the semaphore automatically when it falls out of scope.
 ///
 /// Returned from `Semaphore::try_access`. 
@@ -146,28 +158,14 @@ impl<T> ShutdownHandle<T> {
 /// Guards can be cloned, in which case the original guard and all descendent guards need
 /// to go out of scope for the single access to be released on the semaphore.
 pub struct SemaphoreGuard<T> {
-    raw: Arc<RawSemaphore>,
-    counter: Arc<AtomicUsize>,
-    resource: Arc<T>
+    inner: Arc<GuardInner<T>>
 }
 
 impl<T> Clone for SemaphoreGuard<T> {
     #[inline]
     fn clone(&self) -> SemaphoreGuard<T> {
-        self.counter.fetch_add(1, Ordering::SeqCst);
         SemaphoreGuard {
-            raw: self.raw.clone(),
-            counter: self.counter.clone(),
-            resource: self.resource.clone()
-        }
-    }
-}
-
-impl<T> Drop for SemaphoreGuard<T> {
-    fn drop(&mut self) {
-        let previous_count = self.counter.fetch_sub(1, Ordering::SeqCst);
-        if previous_count == 1 {
-            self.raw.release();
+            inner: self.inner.clone()
         }
     }
 }
@@ -177,7 +175,7 @@ impl<T: Sized> Deref for SemaphoreGuard<T> {
 
     #[inline]
     fn deref(&self) -> &T {
-        self.resource.deref()
+        self.inner.resource.deref()
     }
 }
 
